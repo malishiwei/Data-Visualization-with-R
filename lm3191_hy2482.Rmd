@@ -1,0 +1,1598 @@
+---
+output: html_document
+---
+# Overview of airbnb data in new york by 5 boroughs
+```{r,warning=FALSE}
+suppressMessages(library(readr))
+suppressMessages(library(zoo))
+suppressMessages(library(stringr))
+suppressMessages(library(extracat))
+suppressMessages(library(ggplot2))
+suppressMessages(library(dplyr))
+suppressMessages(library(treemap))
+suppressMessages(library(ggmap))
+suppressMessages(library(lubridate))
+suppressMessages(library(ggiraph))
+suppressMessages(library(ggiraphExtra))
+suppressMessages(library(treemapify))
+suppressMessages(library(RColorBrewer))
+suppressMessages(library(ggmosaic))
+suppressMessages(library(gridExtra))
+suppressMessages(library(viridis))
+suppressMessages(library(grid))
+suppressMessages(library(HH))
+suppressMessages(library(likert))
+suppressMessages(library(leaflet))
+
+```
+
+##Part1. Introduction
+
+Airbnb is a leading company that provides a platform for local hosts to rent their accommodations. Founded in 2008, the company now has listings in about 200 countries.
+
+There is another website, called Inside Airbnb. It allows people to explore how Airbnb is really being used in cities around the world. We get data from http://insideairbnb.com/get-the-data.html. The dataset collects information of houses in New York started from Mar.2008 to Oct.2017. 
+
+The dataset contains a large variety of information like location, price, reviews, etc. This gives us multiple choices of plot form to show different kinds of data.
+
+In this project, we want to get an overview of Airbnb houses in New York by boroughs. We want to obtain the answer of some questions like: Which borough has largest number of houses? Is there any difference of price in 5 boroughs? Which neighbourhood is most popular based on reviews of guests? We want to explore some interesting variables first, then come to look for more differences or interactions between them.
+
+With this project, we can gain more information about those 5 boroughs in New York City, also get some suggestions about how to choose houses taking different aspects into consideration.
+
+
+##Part2: Team Desciption
+
+Our team members are Lishiwei Ma (lm3191) and He You (hy2482).
+
+We discussed and chose the dataset and main topic of our project together.
+
+The main analysis (EDA) and executive summary (Presentation) are divided into 3 parts. Each of us wrote half of them separately.
+
+We completed the introduction and conclusion together.
+
+##Part3: Analysis of Data Quality
+
+###3.1 Describe the dataset
+
+####3.1.1 Overview of the raw dataset
+
+```{r,warning=FALSE}
+listing<-suppressMessages(read_csv("listing.csv"))
+
+# The dim of our dataset
+dim(listing)
+
+# Divide the variables into groups for filtering
+vars<-names(listing)
+house_info<-vars[1:19]
+host_info<-vars[20:37]
+location_info<-vars[38:51]
+living_info<-vars[52:60]
+price_info<-vars[61:67]
+calendar_info<-vars[68:76]
+reviews_info<-vars[c(77:86,96)]
+license_info<-vars[87:95]
+```
+
+There are 44317 rows and 96 columns in our dataset, and we can preliminarily divide the dataset into 8 groups: house, host, location, living, price, calendar, reviews and license. Since there are 96 variables in our raw dataset, we should do dimensionality reduction.
+
+
+####3.1.2 Reduce the dimension of our dataset
+
+In the following part, we select 20 variables possibly related to our topic and form a semi-finished dataset named "Data". "Data" contains 44317 rows and 20 variables, including 7 categorical variables, 2 date variables, 9 integer variables and 2 continuous variables.
+
+```{r,warning=FALSE}
+#Deleting the irrelevant variables
+house<-vars[1]
+host<-c("host_id","host_name")
+location<-vars[c(40,41,49,50)]
+living<-vars[c(52,53)]
+price<-vars[c(61,65,67)]
+reviews<-vars[c(77,80:86)]
+time<-c("last_scraped","host_since")
+Data<-listing[,c(house,location,living,price,reviews,time)]
+dim(Data)
+table(unlist(lapply(Data, class)))
+```
+
+
+###3.2 Data cleaning and preprocessing on our semi-finished dataset "Data"
+
+####3.2.1 Turn price/cleaning fee/extra people from character variables into numeric variables
+
+In the semi-finished dataset "Data", the variable "price","cleaning_fee" and "extra_people" are character variables containing values like "$50.00", "$100.00", so we need to turn the characters into numbers as follows.
+
+```{r,warning=FALSE}
+#turn price into numbers
+Data$Price<- gsub(",", "", x=Data$price)
+Data$Price<- as.numeric(unlist(str_extract_all(Data$Price,"[0-9]*[:punct:]?[0-9]+[:punct:][0-9]+")))
+
+Data$Cleaning_fee<- gsub(",", "", x=Data$cleaning_fee)
+Data$Cleaning_fee<- as.numeric(unlist(str_extract_all(Data$Cleaning_fee,"[0-9]*[:punct:]?[0-9]+[:punct:][0-9]+")))
+
+Data$Extra_people <- gsub(",", "", x=Data$extra_people)
+Data$Extra_people<- as.numeric(unlist(str_extract_all(Data$Extra_people,"[0-9]*[:punct:]?[0-9]+[:punct:][0-9]+")))
+
+```
+
+####3.2.2 Create a new continuous variable "reviews_per_month"
+
+In the semi-finished dataset "Data" we have a variable "number_of_reviews" which carries information of the number of reviews of each house since its start date. However, when we compare the number of reviews of two houses with different start date, it's unfair to say that house A is more popular than house B just because A has more reviews if A has been able to be rented much ealier than B. 
+
+To erase the influence of start date, we create a new variable "reviews_per_month" which recored the monthly averaged reviews of each house as follows.
+
+```{r,warning=FALSE}
+month_diff<-function(i){
+  if(is.na(Data$host_since[i])){
+    return(NA)
+  }
+  else{
+    return(length(seq(from=Data$host_since[i],to=Data$last_scraped[i], by='month'))-1)
+  }
+}
+m<-1:nrow(Data)
+a<-unlist(lapply(m,month_diff))
+reviews_permonth<-function(i){
+  if(is.na(a[i])){
+    return(NA)
+    }
+  else if(a[i]==0){
+    return(Data$number_of_reviews[i])
+  }
+  else{
+    return(round(Data$number_of_reviews[i]/a[i], digits=1))
+  }
+}
+Data$reviews_per_month<-unlist(lapply(m,reviews_permonth))
+```
+
+
+####3.2.3 Final dataset "Data_final"
+
+```{r,warning=FALSE}
+#Final dataset
+Data_final<-Data[,names(Data)[-which(names(Data) %in% c("price", "cleaning_fee", "extra_people"))]]
+dim(Data_final)
+
+# Spliting the dataset into groups
+host<-c("neighbourhood_cleansed","neighbourhood_group_cleansed","latitude","longitude","host_since")
+housing<-c("property_type","room_type")
+reviews<-c("number_of_reviews","review_scores_rating","review_scores_accuracy","review_scores_cleanliness","review_scores_checkin","review_scores_communication","review_scores_location","review_scores_value","reviews_per_month")
+price<-c("Price","Cleaning_fee","Extra_people")
+head(Data_final[,host],3)
+head(Data_final[,housing],3)
+head(Data_final[,reviews],3)
+head(Data_final[,price],3)
+```
+
+After data cleaning and preprocesssing, we get the final dataset "Data_final". It contains 44317 rows and 21 columns. For future analysis, we divided the 21 variables into 4 groups.
+
+a. Host: Includes information of hosts' location and start date.
+
+b. Housing: Includes information of house types and room types.
+
+c. Reivews: Includes reviews scores of rating, accuracy, cleanliness, checkin, communication, location and value as well as the number of reviews and reviews per month.
+
+d. Price: Includes the information of price per night, cleaning fee and extra people fee.
+
+
+###3.3 Check the pattern of missing values
+ 
+```{r}
+find_na<-function(d){
+  return(sum(is.na(d)))
+}
+rows_na<-apply(Data,1,find_na)
+df_na<-as.data.frame(table(Data[which(rows_na!=0),"number_of_reviews"]))
+#Calculate the percentage of rows with missing values
+sum(df_na$Freq)/nrow(Data)
+df_na$Freq[1]/sum(df_na$Freq)
+
+# number of rows with missing values
+sum(df_na$Freq)
+
+#Check the pattern of missing values 
+visna(Data,sort = "b")
+dim(na.omit(Data))
+```
+
+There are 17733 rows with missing values, almost 40% of our dataset. 
+
+In the plot above we can see the variable "Cleaning_fee" contains most missing values, followed by 7 scores variables, which have similar missing patterns. By a more detailed observation, we find that among the rows with missing values, 53% of them has 0 reviews. Thus, some missing of information may due to no guests by far.
+
+In this project, we tried to explore the relationship of specific variables of "Data_final" in each plot. In that case, missing values in one column will not affect the analysis of other columns in each observation. Considering that, we decided not to remove the rows with missing values and deal with the missing values flexibly according to our plots.
+
+
+
+##Part4: EDA
+
+###4.1 Statistical Analysis
+
+####4.1.1 EDA for one variable
+
+#####(1) Host group
+
+a. host_since
+
+```{r}
+#dataset:
+timetotal <- Data_final %>% group_by(host_since) %>% 
+  summarize(Freq = n()) %>% na.omit()
+timemonth<- timetotal %>% 
+  group_by(Year = year(host_since), Month = month(host_since)) %>% 
+  mutate(total = sum(Freq))
+timemonth$time<- as.Date(as.yearmon(timemonth$host_since))
+
+#graph:
+host_time_1<-ggplot(timemonth, aes(time, total)) + geom_line() + geom_point() +
+  labs (x = "Time", y = "Count") +
+  ggtitle("Net increase of houses on Airbnb by month")+
+  theme(plot.title = element_text(hjust = 0.5))
+host_time_1
+
+```
+
+We use lines and points to show the trend of start date time series data.
+
+The plot shows the monthly net increase of the house count on Airbnb from 2008 to Oct.2017 in new york.
+
+At first, we ploted daily net increase of the house count, but there were too many data points concentrating together to see any pattern clearly. So we created a new variable which was the monthly sum of the net increase of house count. Indeed, it improved our plot quality a lot.
+
+From the time series plot, we can see that the monthly net increase of houses on Airbnb expanded quickly during 2012-2016 in New York.
+
+
+b. neighbourhood_cleansed
+
+```{r,warning=FALSE}
+#dataset:
+boroudis <- Data_final %>% group_by(neighbourhood_cleansed, neighbourhood_group_cleansed) %>% 
+  summarize(Freq = n())
+
+#graph:
+host_neighbourhood_1<-ggplot(boroudis, aes(area = Freq, fill = neighbourhood_group_cleansed,
+                     label = neighbourhood_cleansed)) +
+  geom_treemap() +
+  geom_treemap_text()+
+  scale_fill_brewer(palette = "Pastel1") +
+  labs(
+    title = "Number of houses in all neighbourhood",
+    fill = "Boroughs"
+  )+
+  theme(plot.title = element_text(hjust = 0.5))
+host_neighbourhood_1
+
+```
+
+We use treemap to show the distribution of house counts grouped by over 200 neighbourhoods in new york.
+
+At first, we drawed bar chart and cleveland dot plot since neighbourhood was a nomial categorical data but the plot messed up as over 200 categories shown in the plot. So we selected treemap to display the distribution of house counts in each neighbourhood and it did a good job.
+
+In the treemap, the colors represent 5 boroughs and the size of grids is proportional to the house counts in the corresponding neighborhood. The plot reveals that Williamsburg, Bedford-Stuyvesant and Harlem have most houses. 
+
+
+c. neighbourhood_group_cleansed
+
+```{r}
+#dataset:
+df_Borough<-as.data.frame(table(Data_final$neighbourhood_group_cleansed))
+#graph:
+host_borough_1<-ggplot(df_Borough, aes(reorder(Var1,-Freq),Freq))+geom_col()+xlab("Borough")+ggtitle("Houses counts by 5 boroughs")
+host_borough_1
+
+```
+
+We use bar plot to show the distribution of house counts grouped by 5 boroughs in new york.
+
+Since borough is a nomial categorical variable and has only 5 categories, basic bar plot performs well.
+
+The bar chart describes the distribution of houses on Airbnb in new york by 5 boroughs. It clearly shows that the majority of houses on Airbnb in new york city are located at Brooklyn and Manhattan while Staten Island has least.
+
+
+#####(2) For housing group
+
+a. property type
+
+```{r,warning=FALSE}
+#dataset:
+df_property<-as.data.frame(table(Data_final[,living]$property_type))
+
+#graph:
+p_property_bar<-ggplot(df_property, aes(reorder(Var1,Freq),Freq))+geom_col()+xlab("Property Type")+   ylab("Count")+coord_flip()+
+  theme(axis.title=element_text(size=10),axis.text.y = element_text(size = rel(0.9)),axis.text.x = element_text(size = rel(1)))
+theme_dotplot <- theme_bw(16) +
+  theme(axis.ticks.y = element_blank(),
+        panel.grid.major.x = element_blank(),
+        panel.grid.major.y = element_line(size = 0.5),
+        panel.grid.minor.x = element_blank())
+p_property_dot<-ggplot(df_property, aes(x = Freq,y=reorder(Var1, Freq))) + geom_point() +
+  ylab("Property type") +xlab("Count")+theme_dotplot+
+  theme(axis.title=element_text(size=10),axis.text.y = element_text(size = rel(.7)),axis.text.x = element_text(size = rel(0.8)))
+grid.arrange(p_property_bar,p_property_dot,nrow=1, top =textGrob("House counts by property types",gp=gpar(fontsize=15)))
+
+```
+
+We use barplot and cleveland dot plot to show the distribution of house counts grouped by over 20 house types in new york.
+
+At first, we drawed a horizontal bar chart but the result was not satisfying and it strench the x axis too long since house type had over 20 categories. So we flipped the coordinates and it performed a little bit better.
+
+However, the plot was still not effective enough since the counts of different categories were extremly unbalanced, resulting in a very long bar in Apartment category and almost nothing in many other variables. So we drawed a cleveland dot plot and use point location to replace bar length to represent the house counts. 
+
+In particular, we kept both the two plots to show the comparison in displaying effect.
+
+The above two plots show that in new york city, the most common house type is Apartment. House is the second one, and next to it is Loft. Apart from this, the graph implies that you can find many unusual house types on Airbnb in new york such as Cave, Castle, Boat, Train, etc.
+
+
+b. room type
+
+```{r}
+#dataset:
+df_room<-as.data.frame(table(Data_final[,living]$room_type))
+
+#graph:
+housing_room_1<-ggplot(df_room, aes(reorder(Var1,-Freq),Freq))+geom_col()+xlab("Room Type")+
+  ggtitle("House counts by room types")
+housing_room_1
+
+```
+
+We use bar plot to show the distribution of house counts grouped by room types in new york.
+
+Since room type is a nomial categorical variable and has only 3 categories, basic bar plot performs well.The bar chart tells us that in new york, the room type of houses on Airbnb is typically Entire home/apt or Private room, the thrid one is shared room.
+
+
+
+#####(3) For price group
+
+```{r,warning=FALSE}
+#function
+gg_outlier_bin <- function(x,
+                           var_name,
+                           cut_off_floor,
+                           cut_off_ceiling,
+                           col = "black",
+                           fill = "cornflowerblue",
+                           fill_outlier_bins = "forestgreen",
+                           binwidth = NULL) {
+  
+  printing_min_max <- x %>% summarise_(sprintf("round(min(%s, na.rm = TRUE), 1)", var_name),
+                                       sprintf("round(max(%s, na.rm = TRUE), 1)", var_name))
+  
+  ceiling_filter <- ifelse(!is.na(cut_off_ceiling),
+                           sprintf("%s < %f", var_name, cut_off_ceiling),
+                           "1 == 1") 
+  floor_filter   <- ifelse(!is.na(cut_off_floor),
+                           sprintf("%s > %f", var_name, cut_off_floor),
+                           "1 == 1")
+  
+  x_regular <- x %>% filter_(ceiling_filter, floor_filter) %>% 
+    select_(var_name)
+  
+  x_to_roll_ceiling <- x %>% filter_(
+    sprintf("%s >= %f", var_name, cut_off_ceiling)) %>% select_(var_name)
+  if (!is.na(cut_off_ceiling)) x_to_roll_ceiling[, 1] <- cut_off_ceiling
+  
+  x_to_roll_floor <- x %>% filter_(
+    sprintf("%s <= %f", var_name, cut_off_floor)) %>% select_(var_name)
+  if (!is.na(cut_off_floor)) x_to_roll_floor[, 1] <- cut_off_floor
+  
+  plot_obj <- ggplot(x_regular, aes_string(var_name)) +
+    geom_histogram(col = col, fill = fill, binwidth = binwidth)
+  
+  if (!is.na(cut_off_ceiling)) {
+    ticks_for_ceiling <- update_tickmarks_ceiling(plot_obj, cut_off_ceiling,
+                                                  printing_min_max[1,2])
+    plot_obj <- plot_obj +
+      geom_histogram(data = x_to_roll_ceiling, fill = fill_outlier_bins, col = col,
+                     binwidth = binwidth) +
+      scale_x_continuous(breaks = ticks_for_ceiling$tick_positions,
+                         labels = ticks_for_ceiling$tick_labels)
+  }
+  
+  if (!is.na(cut_off_floor)) {
+    ticks_for_floor <- update_tickmarks_floor(plot_obj, cut_off_floor,
+                                              printing_min_max[1,1])
+    plot_obj <- plot_obj +
+      geom_histogram(data = x_to_roll_floor, fill = fill_outlier_bins, 
+                     col = col, binwidth = binwidth) +
+      scale_x_continuous(breaks = ticks_for_floor$tick_positions,
+                         labels = ticks_for_floor$tick_labels)
+  }
+  
+  return(plot_obj)
+}
+
+
+update_tickmarks_ceiling <- function(gg_obj, 
+                                     co, 
+                                     max_print) {
+  ranges <- suppressMessages(
+    ggplot_build(gg_obj)$layout$panel_ranges[[1]])
+  label_to_add <- sprintf("(%s , %s)", round(co, 1), max_print)
+  tick_positions <- ranges$x.major_source
+  tick_labels    <- ranges$x.labels
+  if (overlap_ceiling(tick_positions, co)) {
+    tick_positions <- tick_positions[-length(tick_positions)]
+    tick_labels    <- tick_labels[-length(tick_labels)]
+  }
+  return(list(tick_positions = c(tick_positions, co),
+              tick_labels    = c(tick_labels, label_to_add)))
+}
+
+overlap_ceiling <- function(positions, cut_off) {
+  n <- length(positions)
+  ticks_dif <- positions[n] - positions[n-1]
+  (cut_off - positions[n]) / ticks_dif < 0.25
+}
+
+update_tickmarks_floor <- function(gg_obj, 
+                                   co, 
+                                   min_print) {
+  ranges <- suppressMessages(
+    ggplot_build(gg_obj)$layout$panel_ranges[[1]])
+  label_to_add <- sprintf("(%s , %s)", min_print, round(co, 1))
+  tick_positions <- ranges$x.major_source
+  tick_labels    <- ranges$x.labels
+  if (overlap_floor(tick_positions, co)) {
+    tick_positions <- tick_positions[-1]
+    tick_labels    <- tick_labels[-1]
+  }
+  return(list(tick_positions = c(co, tick_positions),
+              tick_labels    = c(label_to_add, tick_labels)))
+}
+
+overlap_floor <- function(positions, cut_off) {
+  ticks_dif <- positions[2] - positions[1]
+  (positions[1] - cut_off) / ticks_dif < 0.25
+}
+
+```
+
+a. price
+
+```{r}
+price_price_1<-suppressMessages(gg_outlier_bin(Data_final[!is.na(Data_final$Price),],"Price",0,1000,binwidth=50))+theme(axis.text.x=element_text(size=8))+theme(plot.title = element_text(hjust = 0.5))+ggtitle("House counts by price per night")
+price_price_1
+
+```
+
+We use histogram to show the distribution of house counts grouped by price in new york.
+
+As price is a discrete variable so we drawed basic histogram at first. However, the basic histogram did a poor job since it had a large span and uneven distribution. So we applied top coding technique to deal with this problem.
+
+In the above histogram, the left green bin represents the count of houses whose prices are 0 and the right green bin represents the count of houses whose prices are over 1000.
+
+The histogram shows that in new york, the minimum and maximum of the house price are 0 and 10000. Most of the house prices are between 50 and 200. When the price is over 100, the count of houses decreases as the price rises. Furthermore, there are small number of houses whose price is 0 or over 1000.
+
+
+b. cleaning fee
+
+```{r}
+#Graph
+price_cleaning_fee_1<-suppressMessages(gg_outlier_bin(Data_final[!is.na(Data_final$Cleaning_fee),],"Cleaning_fee",0,300,binwidth=20))+theme(text = element_text(size=12))+theme(plot.title = element_text(hjust = 0.5))+ggtitle("House counts by cleaning fee")
+price_cleaning_fee_1
+
+```
+
+We use histogram to show the distribution of house counts grouped by cleaning fee in new york.
+
+As cleaning fee is a discrete variable so we drawed basic histogram at first. However, the basic histogram did a poor job since it had a large span and uneven distribution. So we applied top coding technique to deal with this problem.
+
+In the above histogram, the left green bin represents the count of houses whose cleaning fees are 0 and the right green bin represents the count of houses whose cleaning fees are over 300.
+
+The histogram shows that in new york, the minimum and maximum of the house cleaning fee are 0 and 975. The count of houses decreases as the cleaning fee rises. The majority of the house cleaning fee are below 40 dollars and furthermore most of the houses are free of cleaning fee. Nevertheless, there are few houses charge extremely high cleaning fee like over 300 dollars.
+
+
+c. extra people fee
+
+```{r}
+#Graph
+price_extra_people_1<-suppressMessages(gg_outlier_bin(Data_final[!is.na(Data_final$Extra_people),],"Extra_people",0,100,binwidth=5))+theme(text = element_text(size=12))+theme(plot.title = element_text(hjust = 0.5))+ggtitle("House counts by extra people fee")
+price_extra_people_1
+
+```
+
+We use histogram to show the distribution of house counts grouped by extra people fee in new york.
+
+As extra people fee is a discrete variable so we drawed basic histogram at first. However, the basic histogram did a poor job since it had a large span and uneven distribution. So we applied top coding technique to deal with this problem.
+
+In the above histogram, the left green bin represents the count of houses whose extra people fees are 0 and the right green bin represents the count of houses whose extra people fees are over 100.
+
+The histogram shows that in new york, the minimum and maximum of the house extra people fee are 0 and 300. The count of houses decreases as the extra people fee rises. The majority of the house extra people fee are below 25 dollars and furthermore most of the houses are free of extra people fee. Nevertheless, there are few houses charge high extra people fee like over 100 dollars.
+
+
+#####(4) For reviews group
+
+```{r,warning=FALSE}
+#dataset
+df_reviews<-Data_final[,reviews]
+
+#Graph
+p_accuracy<-ggplot(as.data.frame(table(df_reviews$review_scores_accuracy)),aes(Var1,Freq))+
+  geom_col()+xlab("Reviews scores of accuracy")
+p_cleanliness<-ggplot(as.data.frame(table(df_reviews$review_scores_cleanliness)),aes(Var1,Freq))+
+  geom_col()+xlab("Reviews scores of cleanliness")
+p_checkin<-ggplot(as.data.frame(table(df_reviews$review_scores_checkin)),aes(Var1,Freq))+
+  geom_col()+xlab("Reviews scores of checkin")
+p_communication<-ggplot(as.data.frame(table(df_reviews$review_scores_communication)),aes(Var1,Freq))+geom_col()+xlab("Reviews scores of communication")
+p_location<-ggplot(as.data.frame(table(df_reviews$review_scores_location)),aes(Var1,Freq))+
+  geom_col()+xlab("Reviews scores of location")
+p_value<-ggplot(as.data.frame(table(df_reviews$review_scores_value)),aes(Var1,Freq))+
+  geom_col()+xlab("Reviews scores of value")
+```
+
+a. review_scores_rating
+
+```{r}
+reviews_rating_1<-suppressMessages(gg_outlier_bin(df_reviews[!is.na(df_reviews$review_scores_rating),],"review_scores_rating",50,100,binwidth=5))
+reviews_rating_1+ggtitle("House counts by reviews scores of rating")
+
+```
+
+We use histogram to show the distribution of house counts grouped by reviews scores of rating in new york.
+
+As reviews scores of rating is a discrete variable so we drawed basic histogram at first. However, the basic histogram did a poor job since it had a uneven distribution. So we applied top coding technique to deal with this problem.
+
+In the above histogram, the left green bin represents the count of houses whose reviews scores of rating are below 50 and the right green bin represents the count of houses whose reviews scores of rating are 100.
+
+The histogram shows that in new york, the minimum and maximum of the reviews scores of rating of houses are 20 and 100. The count of houses increases as the reviews scores of rating rise. The majority of the reviews scores of rating of houses are beyond 90 and furthermore a large number of houses get full scores in guest reviews. Nevertheless, there are few houses get relatively low scores like below 50.
+
+
+b. number_of_reviews
+
+```{r}
+reviews_number_1<-suppressMessages(gg_outlier_bin(df_reviews[!is.na(df_reviews$number_of_reviews),],"number_of_reviews",0,100,binwidth=5))
+reviews_number_1+ggtitle("House counts by number of reviews")
+
+```
+
+We use histogram to show the distribution of house counts grouped by total number of reviews in new york.
+
+As total number of reviews is a discrete variable so we drawed basic histogram at first. However, the basic histogram did a poor job since it had a large span and a uneven distribution. So we applied top coding technique to deal with this problem.
+
+In the above histogram, the left green bin represents the count of houses whose total number of reviews are 0 and the right green bin represents the count of houses whose total number of reviews are over 100.
+
+The histogram shows that in new york, the minimum and maximum of the total number of reviews of houses are 0 and 489. The count of houses decreases as the total number of reviews rises. The majority of the total number of reviews of houses are between 0 and 25 and furthermore a large number of houses have no guests yet. Nevertheless, there are few houses are rather popular whose total number of reviews are above 100.
+
+c. reviews_per_month
+
+```{r}
+reviews_per_month_1<-suppressMessages(gg_outlier_bin(df_reviews[!is.na(df_reviews$reviews_per_month),],"reviews_per_month",0,5,binwidth=0.2))
+reviews_per_month_1+ggtitle("House counts by number of reviews per month")
+
+```
+
+We use histogram to show the distribution of house counts grouped by number of reveiws per month in new york.
+
+As number of reveiws per month is a discrete variable so we drawed basic histogram at first. However, the basic histogram did a poor job since it had a large span and a uneven distribution. So we applied top coding technique to deal with this problem.
+
+In the above histogram, the left green bin represents the count of houses whose number of reveiws per month are 0 and the right green bin represents the count of houses whose number of reveiws per month are over 5.
+
+The histogram shows that in new york, the minimum and maximum of the number of reveiws per month of houses are 0 and 20. The count of houses decreases as the number of reveiws per month rises. The majority of the number of reveiws per month of houses are between 0 and 20 and furthermore a large number of houses have no guests yet. Nevertheless, there are few houses are rather popular whose number of reveiws per month are above 5.
+
+
+d. reviews of score for 6 aspects
+
+```{r}
+grid.arrange(p_accuracy,p_cleanliness,p_checkin,p_communication,p_location,p_value,nrow=3,top =textGrob("House counts by reviews scores of 6 aspects",gp=gpar(fontsize=15)))
+
+```
+
+We use bar plots to show the distribution of house counts grouped by reviews scores of accuracy, cleanliness, checkin, communication, location and value in new york.
+
+Since each variable is a nomial categorical variable (only integers) and has only few categories, basic bar plot performs well.
+
+The above gridded bar plots shows the distribution of reviews scores concerning 6 aspects of houses, which are accuracy, cleanliness, checkin, communication, location and value.
+
+The bar plots show that in each aspect, the reviews scores are mainly distributed between 8 and 10 and furthermore concentrated on full scores 10. Checkin and communication have a similar distribution pattern which have no scores lower than 8. Value, location and accuracy have parallel pattern which have a tyni nunber of houses receive scores below 8. Besides, they are more low scores in cleanliness.
+
+
+
+####4.1.2 EDA for two variables
+
+To relate to our topic, we set one variable as 5 boroughs, and we explore the relationship between the 5 boroughs and the other variable.
+
+#####(1) host
+
+a. host_since
+
+```{r}
+#dataset:
+timeborou <- Data_final %>% group_by(host_since, neighbourhood_group_cleansed) %>% 
+  summarize(Freq = n()) %>% na.omit()
+timeboroumon<- timeborou%>% 
+  group_by(year(host_since), month(host_since), neighbourhood_group_cleansed)%>%
+  mutate(total = sum(Freq))
+timeboroumon$time<- as.Date(as.yearmon(timeboroumon$host_since))
+
+#graph:
+host_time_2<-ggplot(timeboroumon, aes(month(host_since), total, color = neighbourhood_group_cleansed)) + 
+  geom_line() + geom_point() +
+  ggtitle("Host Trend by district and month")+
+  labs(x = "Time", y="Number of houses", color="Boroughs") +
+  facet_grid(~year(host_since))+
+  scale_x_continuous(breaks=c(1,3,5,7,9,11), labels = c(1,3,5,7,9,11)) +
+  theme(plot.title = element_text(hjust = 0.5))
+host_time_2
+
+```
+
+We use lines and points to show the trend of start date time series data.
+
+The plot shows the monthly net increase of the house count on Airbnb from 2008 to Oct.2017 in 5 boroughs seperately.
+
+We ploted the house count by day as our raw data at first, but there were too many data concentrating together to see any pattern clearly. So we calculated the sum of house count in each month and ploted by boroughs.
+
+The first Airbnb house in New York started in Brooklyn on Mar.2008. The house count in Brooklyn growed rapidly and followed by Manhattan until 2013.
+
+Manhattan has the highest number of joining-house from 2013 till now. 
+
+There are fewer houses in Queens but the number has been keeping increasing.
+
+Bronx and Staten Island had lowest number of houses during these years.
+
+It is hard to say there is any yearly trend. Maybe the growing speed was greater during summer vacation.
+
+
+#####(2) housing
+
+a. property type
+
+```{r,warning=FALSE}
+#dataset
+boroughs<-unique(Data_final$neighbourhood_group_cleansed)
+freq_class<-function(x){
+  if(x<=50){return("1~10")}
+  else if(x>10&x<=100){return("10~100")}
+  else if(x>100&x<=1000){return("100~1000")}
+  else if(x>1000&x<=10000){return("1000~10000")}
+  else{return("10000~")}
+}
+
+property_type<-df_property$Var1[sort(df_property$Freq, index.return=TRUE)$ix]
+df_borough_property<-data.frame(property_type)
+for(i in 1:length(boroughs)){
+  d<-as.data.frame(table(Data_final[Data_final$neighbourhood_group_cleansed==boroughs[i],"property_type"]))
+  a<-NULL
+  for(j in 1:length(property_type)){
+    if(is.element(property_type[j],d$Var1)){
+      a[j]<-freq_class(d$Freq[match(property_type[j],d$Var1)])
+    }
+    else{a[j]<-0}
+  }
+  df_borough_property[,boroughs[i]]<-a
+}
+z<-c(df_borough_property[,2],df_borough_property[,3],df_borough_property[,4],df_borough_property[,5],df_borough_property[,6])
+x<-c(rep(1,28),rep(2,28),rep(3,28),rep(4,28),rep(5,28))
+y<-c(rep(1:28,5))
+df <- data.frame(x, y)
+
+theme_heat <- theme_classic() +
+  theme(axis.line = element_blank(),
+        axis.ticks = element_blank())
+df$grp <- z
+
+#Graph
+housing_property_2<-ggplot(df, aes(x, y,fill = grp)) +geom_tile(color = "white")+
+  scale_y_discrete(limits=as.character(property_type),labels=as.character(property_type))+
+  scale_x_discrete(limits=boroughs,labels=boroughs)+theme_heat+
+  xlab("Boroughs")+ylab("Property Types")+scale_fill_manual(values = brewer.pal(8,"Blues"))+
+  ggtitle("Heatmap of the house counts by property types in 5 boroughs")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  guides(fill=guide_legend(title="House Counts"))
+housing_property_2
+```
+
+We use heatmap to show the distribution pattern of counts of house types by 5 boroughs. Since the range of house counts of different house types is large, so we devide the counts into groups as above, thus it turned out to be a ordial categorical data.
+
+Main property types for all 5 boroughs are apartment and house. There are most various types of property in Brooklyn.
+
+
+b. room type
+
+```{r}
+#dataset:
+roomtypeborou <- Data_final %>% group_by(room_type, neighbourhood_group_cleansed) %>% 
+  summarize(Freq = n())# %>% na.omit()
+
+#graph:
+fills <- brewer.pal(3, 'RdBu')
+housing_room_2<-ggplot(roomtypeborou, aes(weight = Freq, x = product(neighbourhood_group_cleansed), fill = room_type)) +
+  geom_mosaic() + scale_fill_manual(values = fills) + 
+  labs(x = "Boroughs", y = "Room type", fill="Room type") +
+  ggtitle("Different room types in 5 boroughs")+
+  theme(plot.title = element_text(hjust = 0.5),
+   axis.text.x = element_text(size = 10,vjust = 0.7,  hjust = 0.5, angle = 45))
+housing_room_2
+
+```
+
+We use mosaic plot to show pattern of categorical data. It shows the composition of three kinds of different room types in 5 boroughs.
+
+Most houses locate on Manhattan and Brooklyn.
+
+More than half of Airbnb houses in Manhattan is Entire home or apartment, followed by private room and few shared room.
+
+Oppositely, the number of private room is larger than the number of entire room in all other boroughs. It may bacause most houses or apartments in Manhattan are relatively small, people tend to have more space by renting the entire house.
+
+
+#####(3) price
+
+a. Price
+
+```{r,warning=FALSE}
+#Graph
+price_1<-suppressMessages(gg_outlier_bin(Data_final[!is.na(Data_final$Price),][Data_final$neighbourhood_group_cleansed==boroughs[1],],"Price",0,500,binwidth=50)+labs(title=boroughs[1])+theme(axis.text=element_text(size=8)))
+price_2<-suppressMessages(gg_outlier_bin(Data_final[!is.na(Data_final$Price),][Data_final$neighbourhood_group_cleansed==boroughs[2],],"Price",0,500,binwidth=50)+labs(title=boroughs[2])+theme(axis.text=element_text(size=8)))
+price_3<-suppressMessages(gg_outlier_bin(Data_final[!is.na(Data_final$Price),][Data_final$neighbourhood_group_cleansed==boroughs[3],],"Price",0,500,binwidth=50)+labs(title=boroughs[3])+theme(axis.text=element_text(size=8)))
+price_4<-suppressMessages(gg_outlier_bin(Data_final[!is.na(Data_final$Price),][Data_final$neighbourhood_group_cleansed==boroughs[4],],"Price",0,500,binwidth=50)+labs(title=boroughs[4])+theme(axis.text=element_text(size=8)))
+price_5<-suppressMessages(gg_outlier_bin(Data_final[!is.na(Data_final$Price),][Data_final$neighbourhood_group_cleansed==boroughs[5],],"Price",0,500,binwidth=50)+labs(title=boroughs[5])+theme(axis.text=element_text(size=8)))
+
+grid.arrange(price_1,price_2,price_3,price_4,price_5,nrow=3,top=textGrob("Price by 5 boroughs", gp=gpar(fontsize=20,font=8)))
+
+```
+
+We use histogram to show pattern of continuous data. It shows the distribution of price by boroughs.
+
+The range of price is large, so we topcoded price higher than 500 as above.
+
+The most common price groups are below 125 in all 5 boroughs.
+
+There are more houses with price around or higher than 125 in Manhattan. Most houses are cheaper than 75 in Bronx, Queens and Staten Island.
+
+
+b. Cleaning_fee
+
+```{r}
+#Graph
+clean_1<-suppressMessages(gg_outlier_bin(Data_final[!is.na(Data_final$Cleaning_fee),][Data_final$neighbourhood_group_cleansed==boroughs[1],],"Cleaning_fee",0,100,binwidth=5)+labs(title=boroughs[1])+theme(axis.text.y=element_text(size=9),axis.text.x=element_text(size=10),axis.title=element_text(size=12,face="bold")))
+clean_2<-suppressMessages(gg_outlier_bin(Data_final[!is.na(Data_final$Cleaning_fee),][Data_final$neighbourhood_group_cleansed==boroughs[2],],"Cleaning_fee",0,100,binwidth=5)+labs(title=boroughs[2])+theme(axis.text.y=element_text(size=9),axis.text.x=element_text(size=10),axis.title=element_text(size=12,face="bold")))
+clean_3<-suppressMessages(gg_outlier_bin(Data_final[!is.na(Data_final$Cleaning_fee),][Data_final$neighbourhood_group_cleansed==boroughs[3],],"Cleaning_fee",0,100,binwidth=5)+labs(title=boroughs[3])+theme(axis.text.y=element_text(size=9),axis.text.x=element_text(size=10),axis.title=element_text(size=12,face="bold")))
+clean_4<-suppressMessages(gg_outlier_bin(Data_final[!is.na(Data_final$Cleaning_fee),][Data_final$neighbourhood_group_cleansed==boroughs[4],],"Cleaning_fee",0,100,binwidth=5)+labs(title=boroughs[4])+theme(axis.text.y=element_text(size=9),axis.text.x=element_text(size=10),axis.title=element_text(size=12,face="bold")))
+clean_5<-suppressMessages(gg_outlier_bin(Data_final[!is.na(Data_final$Cleaning_fee),][Data_final$neighbourhood_group_cleansed==boroughs[5],],"Cleaning_fee",0,100,binwidth=5)+labs(title=boroughs[5])+theme(axis.text.y=element_text(size=9),axis.text.x=element_text(size=10),axis.title=element_text(size=12,face="bold")))
+
+grid.arrange(clean_1,clean_2,clean_3,clean_4,clean_5,nrow=3,top=textGrob("Cleaning fee by 5 boroughs", gp=gpar(fontsize=20,font=8)))
+
+```
+
+We use histogram to show the distribution of cleaning fee by boroughs.
+
+The range of cleaning fee is large, so we topcoded cleaning fee higher than 100. 
+
+All of those boroughs have a large number of houses without cleaning fee. There are also some popular choices of cleaning fee like aroud 50. Manhattan contains most number of houses with cleaning fee higher than 100.
+
+
+c. Extra people
+
+```{r}
+#Graph
+extra_1<-suppressMessages(gg_outlier_bin(Data_final[!is.na(Data_final$Extra_people),][Data_final$neighbourhood_group_cleansed==boroughs[1],],"Extra_people",0,75,binwidth=5)+labs(title=boroughs[1])+theme(axis.text.y=element_text(size=9),axis.text.x=element_text(size=10),axis.title=element_text(size=12,face="bold")))
+extra_2<-suppressMessages(gg_outlier_bin(Data_final[!is.na(Data_final$Extra_people),][Data_final$neighbourhood_group_cleansed==boroughs[2],],"Extra_people",0,75,binwidth=5)+labs(title=boroughs[2])+theme(axis.text.y=element_text(size=9),axis.text.x=element_text(size=10),axis.title=element_text(size=12,face="bold")))
+extra_3<-suppressMessages(gg_outlier_bin(Data_final[!is.na(Data_final$Extra_people),][Data_final$neighbourhood_group_cleansed==boroughs[3],],"Extra_people",0,75,binwidth=5)+labs(title=boroughs[3])+theme(axis.text.y=element_text(size=9),axis.text.x=element_text(size=10),axis.title=element_text(size=12,face="bold")))
+extra_4<-suppressMessages(gg_outlier_bin(Data_final[!is.na(Data_final$Extra_people),][Data_final$neighbourhood_group_cleansed==boroughs[4],],"Extra_people",0,75,binwidth=5)+labs(title=boroughs[4])+theme(axis.text.y=element_text(size=9),axis.text.x=element_text(size=10),axis.title=element_text(size=12,face="bold")))
+extra_5<-suppressMessages(gg_outlier_bin(Data_final[!is.na(Data_final$Extra_people),][Data_final$neighbourhood_group_cleansed==boroughs[5],],"Extra_people",0,75,binwidth=5)+labs(title=boroughs[5])+theme(axis.text.y=element_text(size=9),axis.text.x=element_text(size=10),axis.title=element_text(size=12,face="bold")))
+
+grid.arrange(extra_1,extra_2,extra_3,extra_4,extra_5,nrow=3,top=textGrob("Extra people fee by 5 boroughs", gp=gpar(fontsize=20,font=8)))
+
+```
+
+We use histogram to show the distribution of extra people fee by boroughs.
+
+The range of extra people fee is large, so we topcoded them higher than 75. 
+
+All of those boroughs have a large number of houses without extra people fee. 
+
+There are some popular choices of extra people fee like around 25 and 50. 
+
+
+#####(4) reviews
+
+a. radar plot for 7 scores
+
+```{r}
+#dataset:
+score<- na.omit(Data_final[, c(3, 9:15)])
+scoreborou <- score %>% group_by(group=neighbourhood_group_cleansed) %>% 
+  summarise(rating=sum(review_scores_rating)/n(), accuracy=sum(review_scores_accuracy)/(10*n()),
+            cleanliness=sum(review_scores_cleanliness)/(10*n()), checkin=sum(review_scores_checkin)/(10*n()),
+            communication=sum(review_scores_communication)/(10*n()), location=sum(review_scores_location)/(10*n()),
+            value= sum(review_scores_value)/(10*n()))
+
+#graph:
+reviews_scores_2<-ggRadar(data=scoreborou,aes(group=group))+ 
+  ggtitle("Radar plot for different scores in 5 boroughs")+
+  theme(plot.title = element_text(hjust = 0.5))
+reviews_scores_2
+
+```
+
+We use radar plot to show the rank in several aspects of 5 boroughs.
+
+There is one comprehensive rating score and 6 score focus on accuracy, cleanliness, checkin, communication, location and value seperately.
+
+The average score of houses on Manhattan is highest in aspect of location and lowest in all other aspects. Places to be visited in Manhattan
+are more attractive than houses themselves.
+
+Average scores of houses on Brooklyn take first place on accuracy, checkin and communication. The service of hosts is better on Brooklyn.
+
+Staten Island holds for the highest score of rating, cleanliness and value. Though there are few houses on Staten Island, cheapness and cleanliness are attractive to tourists.
+
+
+b. reviews of ratings
+
+```{r}
+#Graph
+rating_1<-suppressMessages(gg_outlier_bin(Data_final[!is.na(df_reviews$review_scores_rating),][Data_final$neighbourhood_group_cleansed==boroughs[1],],"review_scores_rating",70,100,binwidth=5)+labs(title=boroughs[1]))
+rating_2<-suppressMessages(gg_outlier_bin(Data_final[!is.na(df_reviews$review_scores_rating),][Data_final$neighbourhood_group_cleansed==boroughs[2],],"review_scores_rating",70,100,binwidth=5)+labs(title=boroughs[2]))
+rating_3<-suppressMessages(gg_outlier_bin(Data_final[!is.na(df_reviews$review_scores_rating),][Data_final$neighbourhood_group_cleansed==boroughs[3],],"review_scores_rating",70,100,binwidth=5)+labs(title=boroughs[3]))
+rating_4<-suppressMessages(gg_outlier_bin(Data_final[!is.na(df_reviews$review_scores_rating),][Data_final$neighbourhood_group_cleansed==boroughs[4],],"review_scores_rating",70,100,binwidth=5)+labs(title=boroughs[4]))
+rating_5<-suppressMessages(gg_outlier_bin(Data_final[!is.na(df_reviews$review_scores_rating),][Data_final$neighbourhood_group_cleansed==boroughs[5],],"review_scores_rating",70,100,binwidth=5)+labs(title=boroughs[5]))
+
+grid.arrange(rating_1,rating_2,rating_3,rating_4,rating_5,nrow=2,top=textGrob("Rating of reviews by 5 boroughs", gp=gpar(fontsize=20,font=8)))
+
+```
+
+We use histogram to show the distribution of review scores rating by boroughs.
+
+The range of scores is large, so we bottomcoded them lower than 70. 
+
+All of those boroughs have a large number of houses with rating higher than 90.
+
+The proportion of full marks houses is highest in Staten Island.
+
+
+c. number of reviews
+
+```{r}
+#Graph
+number_1<-suppressMessages(gg_outlier_bin(Data_final[!is.na(df_reviews$number_of_reviews),][Data_final$neighbourhood_group_cleansed==boroughs[1],],"number_of_reviews",0,100,binwidth=5)+labs(title=boroughs[1]))+theme(text = element_text(size=10))
+number_2<-suppressMessages(gg_outlier_bin(Data_final[!is.na(df_reviews$number_of_reviews),][Data_final$neighbourhood_group_cleansed==boroughs[2],],"number_of_reviews",0,100,binwidth=5)+labs(title=boroughs[2]))+theme(text = element_text(size=10))
+number_3<-suppressMessages(gg_outlier_bin(Data_final[!is.na(df_reviews$number_of_reviews),][Data_final$neighbourhood_group_cleansed==boroughs[3],],"number_of_reviews",0,100,binwidth=5)+labs(title=boroughs[3]))+theme(text = element_text(size=10))
+number_4<-suppressMessages(gg_outlier_bin(Data_final[!is.na(df_reviews$number_of_reviews),][Data_final$neighbourhood_group_cleansed==boroughs[4],],"number_of_reviews",0,100,binwidth=5)+labs(title=boroughs[4]))+theme(text = element_text(size=10))
+number_5<-suppressMessages(gg_outlier_bin(Data_final[!is.na(df_reviews$number_of_reviews),][Data_final$neighbourhood_group_cleansed==boroughs[5],],"number_of_reviews",0,100,binwidth=5)+labs(title=boroughs[5]))+theme(text = element_text(size=10))
+
+grid.arrange(number_1,number_2,number_3,number_4,number_5,nrow=2,top=textGrob("Number of reviews by 5 boroughs", gp=gpar(fontsize=20,font=8)))
+
+```
+
+We use histogram to show the distribution of number of reviews by boroughs.
+
+The range of number of reviews is large, so we topcoded them higher than 100.
+
+All of those boroughs have a large number of houses with zero review. Proportion of houses with few number of reviews is a little higher in Brooklyn and Manhattan.
+
+
+d. reviews per month
+
+```{r}
+#Graph
+month_1<-suppressMessages(gg_outlier_bin(Data_final[!is.na(df_reviews$reviews_per_month),][Data_final$neighbourhood_group_cleansed==boroughs[1],],"reviews_per_month",0,5,binwidth=0.5)+labs(title=boroughs[1]))
+month_2<-suppressMessages(gg_outlier_bin(Data_final[!is.na(df_reviews$reviews_per_month),][Data_final$neighbourhood_group_cleansed==boroughs[2],],"reviews_per_month",0,5,binwidth=0.5)+labs(title=boroughs[2]))
+month_3<-suppressMessages(gg_outlier_bin(Data_final[!is.na(df_reviews$reviews_per_month),][Data_final$neighbourhood_group_cleansed==boroughs[3],],"reviews_per_month",0,5,binwidth=0.5)+labs(title=boroughs[3]))
+month_4<-suppressMessages(gg_outlier_bin(Data_final[!is.na(df_reviews$reviews_per_month),][Data_final$neighbourhood_group_cleansed==boroughs[4],],"reviews_per_month",0,5,binwidth=0.5)+labs(title=boroughs[4]))
+month_5<-suppressMessages(gg_outlier_bin(Data_final[!is.na(df_reviews$reviews_per_month),][Data_final$neighbourhood_group_cleansed==boroughs[5],],"reviews_per_month",0,5,binwidth=0.5)+labs(title=boroughs[5]))
+
+grid.arrange(month_1,month_2,month_3,month_4,month_5,nrow=2,top=textGrob("Reviews per month by 5 boroughs", gp=gpar(fontsize=20,font=8)))
+
+```
+
+We use histogram to show the distribution of number of reviews per month by boroughs.
+
+The range of number of reviews per month is large, so we topcoded them higher than 5. 
+
+All of those boroughs have a large number of houses with zero review per month. Distributions are similar in all 5 boroughs.
+
+
+
+####4.1.3 EDA for 3 variables
+
+#####(1) price + number of reviews
+
+```{r,warning=FALSE}
+#dataset:
+pricenum<- Data_final[, c("neighbourhood_group_cleansed","Price","number_of_reviews")]
+for(i in (1:nrow(pricenum))){
+  if(pricenum$Price[i]<=50){
+    pricenum$class[i]<- "50 or less"
+  }
+  else if(pricenum$Price[i]<=100){
+    pricenum$class[i]<- "51 - 100"
+  }
+  else if(pricenum$Price[i]<=150){
+    pricenum$class[i]<- "101 - 150"
+  }
+  else if(pricenum$Price[i]<=200){
+    pricenum$class[i]<- "151 - 200"
+  }
+  else if(pricenum$Price[i]<=300){
+    pricenum$class[i]<- "201 - 300"
+  }
+  else if(pricenum$Price[i]<=400){
+    pricenum$class[i]<- "301 - 400"
+  }
+  else if(pricenum$Price[i]<=500){
+    pricenum$class[i]<- "401 - 500"
+  }
+  else {
+    pricenum$class[i]<- "501 or more"
+  }
+}
+
+pricenum$class<- as.factor(pricenum$class)
+pricecount <- pricenum %>% group_by(class, neighbourhood_group_cleansed) %>% 
+  mutate(Freq = n(), reviewsum = sum(number_of_reviews)) #%>% summarize(Freq = n()) 
+pricecount2 <- pricecount %>% group_by(class, neighbourhood_group_cleansed) %>% 
+  summarize(classnum = mean(Freq), reviewnum = mean(reviewsum)) 
+
+bronx<- pricecount2[pricecount2$neighbourhood_group_cleansed=="Bronx", ]
+bronx$class<- factor(bronx$class, levels=c("50 or less", "51 - 100", "101 - 150",
+                                           "151 - 200", "201 - 300", "301 - 400", 
+                                           "401 - 500", "501 or more"))
+bronx$classnum<- bronx$classnum/sum(bronx$classnum)
+bronx$reviewnum<- bronx$reviewnum /sum(bronx$reviewnum)
+g1<-ggplot(bronx) +
+  geom_col(aes(x = class, y=classnum))+
+  geom_point(aes(x=class, y = reviewnum, color = "red", size =7))+ 
+  labs(x = "Classes", y = "Percentage", color="Percentage of\n number of reviews") + guides( size=FALSE)+
+  ggtitle("Bronx")+theme(plot.title = element_text(size = 10, face = "bold"))
+
+
+brooklyn<- pricecount2[pricecount2$neighbourhood_group_cleansed=="Brooklyn", ]
+brooklyn$class<- factor(brooklyn$class, levels=c("50 or less", "51 - 100", "101 - 150",
+                                                 "151 - 200", "201 - 300", "301 - 400", 
+                                                 "401 - 500", "501 or more"))
+brooklyn$classnum<- brooklyn$classnum/sum(brooklyn$classnum)
+brooklyn$reviewnum<- brooklyn$reviewnum /sum(brooklyn$reviewnum)
+g2<- ggplot(brooklyn) +
+  geom_col(aes(x = class, y=classnum))+
+  geom_point(aes(x=class, y = reviewnum, color = "red", size =7))+ 
+  labs(x = "Classes", y = "Percentage", color="Percentage of\n number of reviews") + guides( size=FALSE)+
+  ggtitle("Brooklyn")+theme(plot.title = element_text(size = 10, face = "bold"))
+
+manhattan<- pricecount2[pricecount2$neighbourhood_group_cleansed=="Manhattan", ]
+manhattan$class<- factor(manhattan$class, levels=c("50 or less", "51 - 100", "101 - 150",
+                                                   "151 - 200", "201 - 300", "301 - 400", 
+                                                   "401 - 500", "501 or more"))
+manhattan$classnum<- manhattan$classnum/sum(manhattan$classnum)
+manhattan$reviewnum<- manhattan$reviewnum /sum(manhattan$reviewnum)
+g3<- ggplot(manhattan) +
+  geom_col(aes(x = class, y=classnum))+
+  geom_point(aes(x=class, y = reviewnum, color = "red", size =7))+ 
+  labs(x = "Classes", y = "Percentage", color="Percentage of\n number of reviews") + guides( size=FALSE)+
+  ggtitle("Manhattan")+theme(plot.title = element_text(size = 10, face = "bold"))
+
+queens<- pricecount2[pricecount2$neighbourhood_group_cleansed=="Queens", ]
+queens$class<- factor(queens$class, levels=c("50 or less", "51 - 100", "101 - 150",
+                                             "151 - 200", "201 - 300", "301 - 400", 
+                                             "401 - 500", "501 or more"))
+queens$classnum<- queens$classnum/sum(queens$classnum)
+queens$reviewnum<- queens$reviewnum /sum(queens$reviewnum)
+g4<- ggplot(queens) +
+  geom_col(aes(x = class, y=classnum))+
+  geom_point(aes(x=class, y = reviewnum, color = "red", size =7))+ 
+  labs(x = "Classes", y = "Percentage", color="Percentage of\n number of reviews") + guides( size=FALSE)+
+  ggtitle("Queens")+theme(plot.title = element_text(size = 10, face = "bold"))
+
+staten<- pricecount2[pricecount2$neighbourhood_group_cleansed=="Staten Island", ]
+staten$class<- factor(staten$class, levels=c("50 or less", "51 - 100", "101 - 150",
+                                             "151 - 200", "201 - 300", "301 - 400", 
+                                             "401 - 500", "501 or more"))
+staten$classnum<- staten$classnum/sum(staten$classnum)
+staten$reviewnum<- staten$reviewnum /sum(staten$reviewnum)
+g5<- ggplot(staten) +
+  geom_col(aes(x = class, y=classnum))+
+  geom_point(aes(x=class, y = reviewnum, color = "red", size =7))+ 
+  labs(x = "Classes", y = "Percentage", color="Percentage of\n number of reviews") + guides( size=FALSE)+
+  ggtitle("Staten Island")+theme(plot.title = element_text(size = 10, face = "bold"))
+
+#graph:
+grid.arrange(g1, g2, g3, g4, g5, ncol=2,top=textGrob("Price and number of reviews through all classes in 5 boroughs", gp=gpar(fontsize=16,font=8)))
+
+
+```
+
+We use bars and points to show the distribution of price and number of reviews by boroughs.
+
+The range of price is large, so we devided price into 8 classes and calculated house count and total reviews count in each calss.
+
+House with price from 51 to 100 is the first choice for guests in all 5 boroughs.
+Clearly, there are more houses with price higher than 101 in Manhattan. People tend to choose more expensive houses in Manhattan as well.
+
+Percentage of number of reviews is less than percentage of number of houses in class "50 or less" in Brooklyn, which is just the opposite in Bronx, Queens and Staten Island. People tend to choose more expensive houses in Brooklyn. It means it may be benificial if we decrease the percentage of houses with price lower than 50 in Brooklyn and increase it in those 3 boroughs.
+
+
+#####(2) price + ratings
+
+```{r,fig.width = 16, fig.height = 16}
+#dataset
+price_class<-function(x){
+  if(x<=50){
+    return("50 or less")
+  }
+  else if(x<=100){
+    return("51 - 100")
+  }
+  else if(x<=150){
+    return("101 - 150")
+  }
+  else if(x<=200){
+    return("151 - 200")
+  }
+  else if(x<=300){
+    return("201 - 300")
+  }
+  else if(x<=400){
+    return("301 - 400")
+  }
+  else if(x<=500){
+    return("401 - 500")
+  }
+  else {
+    return("501 or more")
+  }
+}
+
+rating_class<-function(x){
+  if(x<=70){
+    return("70 or less")
+  }
+  else if(x<=80){
+    return("70 - 80")
+  }
+  else if(x<=90){
+    return("80 - 90")
+  }
+  else if(x<=99){
+    return("90 - 99")
+  }
+  else {
+    return("100")
+  }
+}
+scale_col<-function(x){
+  if(sum(x)!=0){
+    return(round((x/sum(x)*100),2))
+  }
+  else(
+    return(rep(NA,length(x)))
+  )
+}
+rating_nona<-Data_final[!is.na(Data_final$review_scores_rating),]
+price_rating<-data.frame(rating_nona$Price)
+price_rating$price_class<-unlist(lapply(rating_nona$Price,price_class))
+price_rating$rating<-rating_nona$review_scores_rating
+price_rating$rating_class<-unlist(lapply(rating_nona$review_scores_rating,rating_class))
+price_rating$boroughs<-rating_nona$neighbourhood_group_cleansed
+
+price_type<-c("50 or less","51 - 100" ,"101 - 150", "151 - 200", "201 - 300","301 - 400","401 - 500","501 or more")
+rating_type<-rev(unique(price_rating$rating_class))
+n1<-length(price_type)*5
+
+Df1<-as.data.frame(rep(boroughs,c(n1,n1,n1,n1,n1)))
+names(Df1)<-"boroughs"
+Df1$price_type<-rep(rep(price_type,rep(5,length(price_type))),5)
+Df1$rating_type<-rep(rating_type,n1)
+a<-NULL
+for(i in 1:5){
+  for(j in 1:length(price_type)){
+    sss<-as.data.frame(table(factor(price_rating[(price_rating$boroughs==boroughs[i])&(price_rating$price_class==price_type[j]),"rating_class"], levels = rating_type)))
+    ss<-sss[match(sss$Var1,rating_type),]
+    a<-c(a,ss$Freq)
+  }
+}
+Df1$freq<-a
+
+Df2<-data.frame(rep(boroughs,rep(length(price_type),5)))
+names(Df2)<-"boroughs"
+Df2$price_type<-rep(price_type,5)
+for(i in 1:length(rating_type)){
+  Df2[,rating_type[i]]<-Df1$freq[(Df1$rating_type==rating_type[i])]
+}
+
+
+
+gdata1<-Df2[Df2$boroughs==boroughs[1],2:ncol(Df2)]
+rdata1<-as.data.frame(t(apply(gdata1[,2:ncol(gdata1)],1,scale_col)))
+rdata1$price_type<-price_type
+
+
+div1<-HH::likert(price_type~., na.omit(rdata1), positive.order = FALSE,
+       main = "Proportional distribution of rating scores in Queens",
+       xlab = "count", ylab = "Price Intervals")
+
+gdata2<-Df2[Df2$boroughs==boroughs[2],2:ncol(Df2)]
+rdata2<-as.data.frame(t(apply(gdata2[,2:ncol(gdata2)],1,scale_col)))
+rdata2$price_type<-price_type
+colnames(rdata2)[1:5]<-rating_type
+
+
+
+div2<-HH::likert(price_type~., na.omit(rdata2), positive.order = FALSE,
+       main = "Proportional distribution of rating scores in Bronx",
+       xlab = "count", ylab = "Price Intervals")
+
+gdata3<-Df2[Df2$boroughs==boroughs[3],2:ncol(Df2)]
+rdata3<-as.data.frame(t(apply(gdata3[,2:ncol(gdata3)],1,scale_col)))
+rdata3$price_type<-price_type
+
+
+div3<-HH::likert(price_type~., na.omit(rdata3), positive.order = FALSE,
+       main = "Proportional distribution of rating scores in Brooklyn",
+       xlab = "count", ylab = "Price Intervals")
+
+gdata4<-Df2[Df2$boroughs==boroughs[4],2:ncol(Df2)]
+rdata4<-as.data.frame(t(apply(gdata4[,2:ncol(gdata4)],1,scale_col)))
+rdata4$price_type<-price_type
+colnames(rdata4)[1:5]<-rating_type
+
+div4<-HH::likert(price_type~., na.omit(rdata4), positive.order = FALSE,
+       main = "Proportional distribution of rating scores in Staten Island",
+       xlab = "count", ylab = "Price Intervals")
+
+gdata5<-Df2[Df2$boroughs==boroughs[5],2:ncol(Df2)]
+rdata5<-as.data.frame(t(apply(gdata5[,2:ncol(gdata5)],1,scale_col)))
+rdata5$price_type<-price_type
+div5<-HH::likert(price_type~., na.omit(rdata5), positive.order = FALSE,
+       main = "Proportional distribution of rating scores in Manhattan",
+       xlab = "count", ylab = "Price Intervals")
+
+#Graph
+grid.arrange(div1,div2,div3,div4,div5,nrow=3)
+```
+
+The diverged bar charts shows the proportional distribution of reviews scores of rating in each price intervals by 5 boroughs.
+
+At first, we drawed a scatter plot since the price and scores of rating are two discrete variables but the results were not satisfying because the data points are clustered ar one corner and it was hard to see any pattern clearly.
+
+So we turned the two discrete variables into categorical ones by spliting them into intervals. Now that scores of rating is an opinion variable so we could draw diverged bar chart and it performed much better.
+
+In the above diverged bar charts, each bar represents one price class and the colors represent different scores classes. Within each price class, the length of different color intervals is proportional to the house counts of the corresponding score class. These plots dont' show the house counts information of the each price class.
+
+In Queens, Brooklyn, Manhattan and Staten Island, each price intervals have similar distributions, which is that most of the rating scores are concentrated between 80 and 100. As the price increases, the proportion of scores over 90 also increases. In short, higher price houses tend to receive higher rating scores.
+
+In Bronx, the distribution pattern is unusual since it has small number of houses. The distribution of houses with price below 200 is similar to that of other boroughs. When it comes to the house price is between 200 and 400, the rating scores are perfect. However, when the house price is between 401 and 500 it receives a totally negative scores. This situation may caused by that there only one house in Bronx belonging to this price interval and it happens to perform poorly. Also, in Bronx there are no houses with price over 500.
+
+
+#####(3) price + room type
+
+```{r,warning=FALSE}
+#dataset:
+priceroom<- Data_final[, c("neighbourhood_group_cleansed","room_type","Price")]
+for(i in (1:nrow(priceroom))){
+  if(priceroom$Price[i]<=50){
+    priceroom$class[i]<- "50 or less"
+  }
+  else if(priceroom$Price[i]<=100){
+    priceroom$class[i]<- "51 - 100"
+  }
+  else if(priceroom$Price[i]<=150){
+    priceroom$class[i]<- "101 - 150"
+  }
+  else if(priceroom$Price[i]<=200){
+    priceroom$class[i]<- "151 - 200"
+  }
+  else if(priceroom$Price[i]<=300){
+    priceroom$class[i]<- "201 - 300"
+  }
+  else if(priceroom$Price[i]<=400){
+    priceroom$class[i]<- "301 - 400"
+  }
+  else if(priceroom$Price[i]<=500){
+    priceroom$class[i]<- "401 - 500"
+  }
+  else {
+    priceroom$class[i]<- "501 or more"
+  }
+}
+priceroom$class<- as.factor(priceroom$class)
+priceroom$class<- factor(priceroom$class, levels=c("50 or less", "51 - 100", "101 - 150",
+                                                   "151 - 200", "201 - 300", "301 - 400", 
+                                                   "401 - 500", "501 or more"))
+
+#graph:
+price_room_3<-ggplot(priceroom, aes(x = class, fill = room_type)) + 
+  geom_bar() + 
+  facet_wrap(~neighbourhood_group_cleansed, scales="free")+
+  ggtitle("Price and room types among 5 boroughs")+ 
+  labs(x = "Price Intervals", y = "Count", fill="Room type")+
+  theme(axis.text.x = element_text(size = 10, angle = 90, hjust = 1),
+        plot.title = element_text(hjust = 0.5))
+
+price_room_3
+
+```
+
+We use stacked bar chart to show the distribution of price and room types by boroughs.
+
+We devided price into 8 classes as above.
+
+Most private rooms are cheaper than 100. They may be a little more expensive in Manhattan.
+
+The price of entire home or apartment spreads broadly from under 50 to above 500. Most of them locate on Manhattan and Brooklyn.
+
+Only few shared rooms are expensive than 100 in Bronx, Brooklyn and Manhattan.
+
+
+#####(4) price+property type
+
+```{r}
+#dataset
+property_class<-function(x){
+  if(x=="Apartment"){return("Apartment")}
+  else if(x=="House"){return("House")}
+  else if(x=="Loft"){return("Loft")}
+  else if(x=="Townhouse"){return("Townhouse")}
+  else if(x=="Condominium"){return("Condominium")}
+  else if(x=="Bed & Breakfast"){return("Bed & Breakfast")}
+  else{return("Other")}
+}
+
+DF<-data.frame()
+for(i in 1:length(boroughs)){
+  D<-Data_final[Data_final$neighbourhood_group_cleansed==boroughs[i],]
+  prop<-data.frame(D$property_type)
+  names(prop)<-"property_type"
+  prop$property_class<-unlist(lapply(D$property_type,property_class))
+  prop$price_classes<-unlist(lapply(D$Price,price_class))
+  prop_table<-xtabs(~property_class+price_classes,data=prop)
+  prop_df<-as.data.frame(prop_table)
+  prop_df$boroughs<-rep(boroughs[i],nrow(prop_df))
+  DF<-rbind(DF,prop_df)
+}
+
+mydata<-DF %>% group_by(boroughs)%>% mutate(Total = sum(Freq)) %>% ungroup()
+mydata$price_classes<- factor(mydata$price_classes, levels=c("50 or less", "51 - 100", "101 - 150",
+                                             "151 - 200", "201 - 300", "301 - 400", 
+                                             "401 - 500", "501 or more"))
+property_classes<-c("Apartment","House","Loft","Townhouse","Condominium","Bed & Breakfast","Other")
+mydata$property_class<-factor(mydata$property_class, levels=property_classes)
+
+#Graph
+price_house_3 <- ggplot(mydata, aes(x = property_class, y = price_classes)) +
+  geom_tile(aes(fill = Freq/Total), color = "white") +
+  coord_fixed() + facet_wrap(~boroughs) + 
+  theme_heat+scale_fill_distiller(palette = "RdBu")+
+  scale_x_discrete(labels=property_classes)+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))+
+  xlab("House Types")+ylab("Price Intervals")+ggtitle("Heatmap of house counts by price class and house type")+theme(plot.title = element_text(hjust = 0.5))+
+  guides(fill=guide_legend(title="House Percentages"))
+
+price_house_3
+
+```
+
+The heatmaps show the house counts' distribution of different house types in each price intervals by 5 boroughs.
+
+At first, we drawed a fluctuation diagram since house counts grouped by house types and price intervals could actually be presented as a contigency table. But the result was not satisfying since the distribution over the table was so uneven that we could only see one grid was almost full while the rest were empty. So we turned to mosaic plot and it did a good job.
+
+In the above heatmaps, the color of each grid is proportional to the percentage of house counts in its corresponding borough.
+
+The plots show that in Bronx, Brooklyn, Manhattan and Queens, the most frequent house pattern is Apartment with price between 51 and 100. Furthermore, in these four boroughs, most of the house types is Apartment. 
+
+Particularly,in Staten Island heatmap, the most frequent house pattern is House with price between 51 and 100. The second is House with price below 50 and next to it is the Apartment with price between 51 and 100.Also, there is a missing row indicating that there is no house type information about the houses with price between 301 and 400 in Staten Island (not sure about whether it's missing or no existing).
+
+
+#####(5) rating+ number of reviews:
+
+```{r,warning=FALSE}
+#Graph
+rating_number_3<-ggplot(Data_final, aes(x=number_of_reviews, y=review_scores_rating)) +
+  geom_hex() +
+  scale_fill_viridis() +
+  facet_wrap(~neighbourhood_group_cleansed, scales="free")+
+  ggtitle("Number of reviews vs.rrating scores among 5 boroughs")
+rating_number_3
+
+```
+
+We use hexagonal heatmap to show the distribution of scores and number of reviews by boroughs.
+
+From this plot, we can gain that:
+
+1. There are no houses with lots of reviews and a low score rating.
+
+2. Most ratings are above 75 in all boroughs.
+
+3. Houses with a low number of reviews may have any rating from the lowest to the highest.
+
+4. A few houses with a high number of reviews, over 400, have relatively lower rating than other houses in Manhattan.
+
+5. There are a large number of houses with low number of reviews but high score rating in Manhattan, Brooklyn and Queens.
+
+
+#####(6) rating+ room type:
+
+```{r}
+#dataset
+DDD<-Data_final[!is.na(Data_final$review_scores_rating),]
+rating_room<-data.frame(DDD$review_scores_rating)
+names(rating_room)<-"ratings"
+rating_room$room_type<-DDD$room_type
+rating_room$rating_types<-unlist(lapply(rating_room$ratings,rating_class))
+rating_room$boroughs<-DDD$neighbourhood_group_cleansed
+
+rating_room_df <- rating_room %>% group_by(room_type,rating_types,boroughs) %>% 
+  summarize(Freq = n())# %>% na.omit()
+
+rating_room_df2<-rating_room_df%>% group_by(boroughs,room_type)%>%
+  mutate(Props=Freq/sum(Freq))
+
+
+ratings<-c("70 or less","70 - 80","80 - 90","90 - 99","100")
+rating_room_df2$rating_types<-factor(rating_room_df2$rating_types, levels=ratings)
+
+room_rating_3<-ggplot(rating_room_df2) +
+  geom_mosaic(aes(weight = Props, x = product(rating_types),conds = product(room_type), fill = rating_types)) + 
+  labs(x = "Room type", y = "Percentage") +
+  ggtitle("Different room types in 5 boroughs")+
+  facet_wrap(~boroughs)+coord_flip()+scale_fill_brewer(palette = "RdBu")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  guides(fill=guide_legend(title="Rating Types"))+
+  theme(axis.text.x=element_text(size=7))
+
+room_rating_3
+
+
+```
+
+The same binsize mosaic plots show the proportional distribution of rating scores of different room types by 5 boroughs.
+
+At first, we drawed a typical mosaic plots with binsize represents the count information but the result turned to be disappointing becuase the bins of Private room and Entire home/apt took up almost all the spaces and left no room for the bin representing Shared room category. 
+
+Since we were interested in the rating class distribution within each room type category so we changed the plot type into same binsize mosaic plot and it did very well even though it abandoned the count information of room types in each borough.
+
+In the above same binsize mosaic plots, the bins with same size represent the room types and the colors represent the rating classes.
+
+The plots show that in any boroughs, the room type "Entire home/apt" receives highest scores over 90 and "Shared room" receives most negative reviews especially in Bronx and Queens.
+
+In Manhattan, the "Private room" gets more lower scores than the other two room types while in Staten Island, the "Private room" is reviewed better than "Entire home/apt".
+
+Also, there are only two room types in Staten Island which are "Private room" and "Entire home/apt", the rating scores of "Shared room" category is missing due to uncertain reasons.
+
+
+
+###4.2 Spatial Analysis
+
+#####(1) latitude/longitude+boroughs
+
+```{r,warning=FALSE}
+MyMap1 <- suppressMessages(get_map(location= "new_york", source="google", maptype="terrain", crop=FALSE, zoom=11))
+                  
+lat_long_borough<-ggmap(MyMap1, extent = "device") + geom_point(aes(x = longitude, y = latitude,colour= neighbourhood_group_cleansed) , alpha = 0.3, size = 0.8, data = Data_final)+
+  guides(colour = guide_legend(override.aes = list(size=5)))+ggtitle("The geographical distribution of houses in New York")
+lat_long_borough
+
+
+```
+
+The ggmap shows that most of the Airbnb houses in new york are concentrated on Brooklyn and Manhattan, which is coincide with our previous findings.
+
+Within each borough, the houses are clusterd along the coast line. This may because along the coast line the view is better and there are more tourist attractions here.
+
+
+#####(2) latitude/longitude+room type
+
+```{r,warning=FALSE}
+map<-suppressMessages(get_map(location='New York',zoom=11, maptype="roadmap"))
+
+lat_long_room<-ggmap(map) + 
+  geom_point(data = Data_final, 
+            aes(x = longitude, y = latitude, color=room_type ),alpha=0.3, size=0.8)+
+  ggtitle("House with different room types in New York") +
+  xlab("longitude") + 
+  ylab("latitude")+
+  theme(plot.title = element_text(size = 15))+
+  guides(colour = guide_legend(override.aes = list(size=5)))
+lat_long_room
+```
+
+The map plot shows that in Manhattan, most of the room types is "Entire home/apt" and the second is "Private room" while in Brooklyn is exactly the opposite. In the other 3 boroughs there are more private rooms than entire home or apartments.
+
+The information revealed by the above ggmap is completely consistent with our previous plots.
+
+
+#####(3) latitudu/longitude + neighborhoods
+
+```{r,warning=FALSE}
+##dataste
+
+borou<- Data_final[, c("neighbourhood_cleansed","neighbourhood_group_cleansed","latitude","longitude","Price","number_of_reviews")]
+boroucount <- borou %>% group_by(neighbourhood_cleansed, neighbourhood_group_cleansed) %>% 
+  summarise(longitude=mean(longitude), latitude=mean(latitude), 
+            price=round(mean(Price),2), reviews=sum(number_of_reviews))
+
+boroucount<- boroucount %>% mutate(info=paste(sep = "<br>",paste("Borough: ",neighbourhood_group_cleansed),paste("Neighbouehood: ",neighbourhood_cleansed),
+paste("Average Price: ", price), paste("Total number of reviews: ", reviews))) 
+                    
+
+
+##graph
+map<-suppressMessages(get_map(location='New York',zoom=10, maptype="toner-lite", source="stamen"))
+lat_long_reviews<- leaflet(boroucount) %>% addTiles() %>%
+  addCircleMarkers(lng = ~longitude, lat = ~latitude, popup = ~ info, 
+                   radius =~(reviews/8000) ,  opacity = ~price/400) 
+lat_long_reviews
+
+```
+
+```{r}
+unusal_houses<-df_property$Var1[df_property$Freq<10]
+df_un_house<-Data_final[is.element(Data_final$property_type,unusal_houses),]
+
+```
+
+It is hard to see clear patterns of price and reviews information if we plot all 
+44317 houses in one map. In that case, we calculated the average price and total number of reviews of 217 neighbourhoods seperately. We add circles and labels to show the location and statistical information. 
+
+Radius of circles correspond to total number of reviews in each neighbourhood, the
+opacity is directly proportional to average price.
+
+Williamsburg in Brooklyn is the neighbourhood with largest number of reviews,  followed by Bedford-Stuyvesant in Brooklyn and Harlem in Manhattan. These places are also top 3 neighbourhoods of house counts. Relative inexpensiveness may be another important reason why they are popular. Most popular neighbourhoods lie in Manhattan and west Brooklyn. Bushwick in east Manhattan has relatively few reviews considering its high volume of houses.
+
+Given the high price of houses on south Manhattan, living in west Brooklyn may be a good choice.
+
+
+
+##Part 5. Summary
+
+Our summary is a sketch of the previous EDA part, which displays only the most revealing graphs.
+
+It contains two main parts, statistical analysis and spatial analysis. In statistical analysis the main technique we used is ggplot2 while in spatial analysis the main framework is ggmap. The former focuses on revealing the statistical features of our dataset and the latter mainly shows the geographical pattern of our data.
+
+
+###5.1 Statistical Analysis
+
+####5.1.1 Within groups
+
+#####(1) Host group 
+
+```{r,fig.width = 8, fig.height = 5}
+host_neighbourhood_1
+```
+
+We use treemap to show the distribution of house counts grouped by over 200 neighbourhoods in new york. The colors represent 5 boroughs and the size of grids is proportional to the house counts in the corresponding neighborhood. 
+
+The plot reveals that Airbnb houses maily locate on Manhattan, Brooklyn and Queens. Also, Williamsburg, Bedford-Stuyvesant, Harlem and Bushwick are neighbourhoods with most numbers of houses. 
+
+
+```{r,fig.width = 10, fig.height = 5}
+host_time_2
+```
+
+The plot shows the monthly house increament on Airbnb from 2008 to Oct.2017 by 5 boroughs seperately.
+
+The first Airbnb house in New York occured in Brooklyn on Mar.2008. The house increament in Brooklyn growed rapidly and was surpassed by Manhattan in 2013. Manhattan has the highest number of joining-house from 2013 till now. The house increamen in Manhattan reached the peak in 2015 and started to fall since then. There are fewer houses in Queens but it keeps increasing. Both Bronx and Staten Island fall behind in Airbnb market these years.
+
+
+#####(2) Housing group 
+
+```{r,fig.width = 8, fig.height = 5}
+housing_property_2
+```
+
+We use heatmap to show the pattern of house types by 5 boroughs. The colors represent the magnititude of houses.
+
+The heatmap shows that main house types for all 5 boroughs are Apartment and House. The house type in Brooklyn is most varied and next to it are Queens and Manhattan. Thus, if you want to live in an unusual house in new york such as Cave, Castle, Boat, Train, etc, you'd better start your search from Brooklyn.
+
+Another interesting point the plot shows is that in Brooklyn and Manhattan, apartments is more than houses. In Bronx and Queens counts of these two types of house are nearly equal. While in Staten Island there are more houses than apartments. It implies a simple truth that in the suburbs of new york, the main house type is House while in the downtown of new york, the main house type is Apartment.
+
+
+```{r,fig.width = 7, fig.height = 5}
+housing_room_2
+```
+
+We use mosaic plot to show the pattern of room types in 5 boroughs. The mosaic plot indicates that
+most of houses are located on Manhattan and Brooklyn. Additionally, more than half of the Airbnb houses in Manhattan is Entire home or apartment, followed by private room. Oppositely, the number of private room is larger than that of entire room in all other 4 boroughs. 
+
+It may bacause most of the houses or apartments in Manhattan are relatively small due to high cost of land. Actually many of them have only one bedroom. People tend to have more space and privacy by renting the entire house.
+
+#####(3) Reveiws group 
+
+```{r,fig.width = 6, fig.height = 6}
+reviews_scores_2
+```
+
+We use radar plot to show the rank in several aspects of the 5 boroughs. There is one comprehensive rating score and 6 single-aspect scores, concerning accuracy, cleanliness, checkin, communication, location and value seperately.
+
+The average score of houses on Manhattan is highest in aspect of location and lowest in all the other 6 aspects. Obviously, the hosts in Manhattan benefit a lot from its perfect location. Average scores of houses on Brooklyn take first place on accuracy, checkin and communication, revealing that the hosts' service in Brooklyn takes a leading position. Staten Island holds for the highest score of rating, cleanliness and value. Though there are few houses in Staten Island, cheapness and cleanliness are attractive to guests.
+
+
+```{r,fig.width = 16, fig.height = 10}
+grid.arrange(reviews_number_1+ggtitle("New York"), number_1, number_2, number_3, number_4, number_5,nrow=2,top=textGrob("Number of reviews by 5 boroughs", gp=gpar(fontsize=20,font=8)))
+```
+
+We use histogram to show the distribution of number of reviews in whole New York and by 5 boroughs seperately. All of those boroughs have a large number of houses with zero review. Proportion of houses with few number of reviews is a little higher in Brooklyn, Manhattan and Queens.
+
+
+#####(4) Price group
+
+```{r,fig.width = 15, fig.height = 5}
+grid.arrange(price_price_1,price_cleaning_fee_1,price_extra_people_1,nrow=1)
+```
+
+We use histogram to show the distribution of house counts grouped by price, cleaning fee and extra people fee in new york. 
+
+The first histogram shows that in new york, the minimum and maximum of house price are 0 and 10000. Most of the house price are between 50 and 200. Furthermore, there are small number of houses whose price is 0 or over 1000.
+
+The second histogram shows that in new york, the minimum and maximum of house cleaning fee are 0 and 975. The majority of the house cleaning fee are below 40 dollars. Moreover, most of the houses are free of cleaning fee. Nevertheless, there are few houses charge extremely high cleaning fee like over 300 dollars.
+
+The third histogram shows that in new york, the minimum and maximum of house extra people fee are 0 and 300. The majority of the house extra people fee are below 25 dollars and in detail most of the houses are free of extra people fee. Nevertheless, there are few houses charge high extra people fee like over 100 dollars.
+
+```{r,fig.width = 8, fig.height = 8}
+grid.arrange(price_1,price_2,price_3,price_4,price_5,nrow=3,top=textGrob("Price by 5 boroughs", gp=gpar(fontsize=20,font=8)))
+```
+
+We use histogram to show the distribution of price by 5 boroughs. 
+
+The house price in new york are commonly range from 50 to 150 while Manhattan is slightly different since its common price range is 50 to 200. Most house price are below 100 in Bronx, Queens and Staten Island.
+
+Thus, if you want to know the average house price in new york to avoid rip-offs, keep in mind that houses in Manhattan with price below 200 is normal and in the other 4 boroughs you can expect a 50 dollars off.
+
+
+####5.1.2 Between Groups
+
+#####(1) price + room type
+
+```{r,fig.width = 8, fig.height = 6}
+price_room_3
+```
+
+We use stacked bar chart to show the distribution of price and room types by boroughs. Most private rooms are cheaper than 100 but they may be a little more expensive in Manhattan. Most houses in Bronx, Queens and Staten Island are private rooms.
+
+The price of entire home or apartment spreads broadly from under 50 to above 500. Most of them locate on Manhattan and Brooklyn. Only few shared rooms are expensive than 100 in Bronx, Brooklyn and Manhattan.
+
+#####(2) price + house type
+
+```{r,fig.width = 8, fig.height = 6}
+price_house_3
+```
+
+The heatmaps show the pattern of house counts grouped by house types and price classes in 5 boroughs. In the above heatmaps, the color of each grid is proportional to the percentage of house count in the corresponding borough.
+
+The plots show that in Bronx, Brooklyn, Manhattan and Queens, the most frequent house pattern is apartment with price between 51 and 100. Particularly, in Staten Island heatmap, the most frequent house pattern is House with price between 51 and 100. Also, the missing row in the 5th heatmap may indicate that there is no house type information about the houses with price between 301 and 400 in Staten Island (not sure about whether it's missing or not existing).
+
+
+#####(3) room + rating class
+
+```{r,fig.width = 8, fig.height = 5}
+room_rating_3
+```
+
+
+The same binsize mosaic plots show the proportions of rating scores grouped by room types in 5 boroughs. In the above same binsize mosaic plots, the bins with same size represent the room types and the colors represent the rating classes.
+
+The plots show that in any boroughs, the room type "Entire home/apt" receives highest scores and "Shared room" receives lowest especially in Bronx and Queens. In Manhattan, private rooms get more lower scores while in Staten Island, private rooms are reviewed much better. Particularly, there are only two room types in Staten Island, "Private room" and "Entire home/apt", the rating scores of "Shared room" category is missing due to uncertain reasons.
+
+This plot may offer a piece of advice that if you want a enjoyable trip don't choose a shared room. Moreover, if you are well-off, rent a entire house or apartment.
+
+
+###5.2 Spatial Analysis
+
+```{r}
+lat_long_reviews
+```
+
+We calculated the average price and total number of reviews of 217 neighbourhoods
+seperately and ploted them in map. We add circles and labels to show the location 
+and statistical information. Radius of circles correspond to total number of reviews in each neighbourhood, the opacity is directly proportional to average price.
+
+Williamsburg in Brooklyn is the neighbourhood with largest number of reviews, followed by Bedford-Stuyvesant in Brooklyn and Harlem in Manhattan. These places are also top 3 neighbourhoods of house counts. Relative inexpensiveness may be another important reason why they are popular. Most popular neighbourhoods lie in Manhattan and west Brooklyn, which are close to famous places of New York like the Wall Street and Statue of Liberty. Bushwick in east Manhattan has relatively few reviews considering its high volume of houses. Given the high price of houses on south Manhattan, living in west Brooklyn may be a good choice.
+
+
+
+###5.3 Brief conclusion:
+
+A large proportion of houses locate on Manhattan and Brooklyn. The main property type is apartment in all boroughs except for Staten Island. People prefer entire home in Manhattan but private rooms in other boroughs. However, only the location is satisfying in Manhattan according to guests' reviews. Price for most houses are below 150, though a little bit higher in Manhattan. 
+
+
+
+
+##Part 6. Conclusion
+
+There are still many valuable information contained in the deleted 70 variables. For example, in the discussion about why there are surprisingly more entire home/apts than private rooms in Manhattan, we refered the variable "bedrooms" which is about the number of bedrooms per house and we found that most of the apartments in Manhattan are single-bedroomed. 
+
+Furthermore, all the work we have done are based on the boroughs level so we just get a rough overview of our dataset. Actually we could go deeper and furter. For instance, we could conduct analysis of houses with extremely high price or houses with unusual property types like Cave, Boat, Train, etc.
+
+
+
+
+
+
